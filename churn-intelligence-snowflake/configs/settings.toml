@@ -1,0 +1,21 @@
+[snowflake]
+account = "rwzcwwx-tv97893"  # Replace with env var in production
+user = "AN05893N"            # Replace with env var in production
+role = "ACCOUNTADMIN"
+warehouse = "BANKING"
+database = "CHURN_DEMO"
+schema = "PUBLIC"
+
+[kafka]
+bootstrap_servers = "pkc-1234.us-east-1.aws.confluent.cloud:9092"
+security_protocol = "SASL_SSL"
+sasl_mechanism = "PLAIN"
+topic = "card_transactions"
+
+[ml]
+model_name = "churn_rf_v1"
+stage_name = "MODEL_STAGE"
+
+[app]
+title = "Churn Intelligence Platform"
+max_risk_users = 50

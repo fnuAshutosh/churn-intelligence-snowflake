@@ -1,0 +1,524 @@
+# Confluent Cloud + ksqlDB Setup Guide
+
+## Complete Setup (30 minutes)
+
+This guide will replace your Spark streaming job with Confluent's managed ksqlDB service.
+
+---
+
+## Part 1: Confluent Cloud Account Setup (5 minutes)
+
+### Step 1: Sign Up for Confluent Cloud
+
+1. Go to: https://confluent.cloud/signup
+2. Click **"Start free"**
+3. Fill in:
+   - Email address
+   - Password
+   - Company name (can be anything)
+4. **No credit card required** for trial
+5. Verify your email
+6. Log in to Confluent Cloud
+
+### Step 2: Create a Kafka Cluster
+
+1. After login, you'll see "Create cluster" button
+2. Click **"Create cluster"**
+3. Choose **"Basic"** cluster (free tier)
+4. Select:
+   - **Cloud provider**: AWS (or your preference)
+   - **Region**: US East (N. Virginia) - `us-east-1`
+   - **Availability**: Single zone
+5. Click **"Continue"**
+6. Cluster name: `streaming-poc`
+7. Click **"Launch cluster"**
+8. ⏳ Wait 5-10 minutes for cluster to provision
+
+---
+
+## Part 2: Create Kafka Topic (2 minutes)
+
+### Step 3: Create the `card-events` Topic
+
+1. In your cluster, click **"Topics"** (left sidebar)
+2. Click **"Create topic"**
+3. Settings:
+   - **Topic name**: `card-events`
+   - **Partitions**: `1`
+   - **Retention time**: `1 day` (default)
+4. Click **"Create with defaults"**
+
+---
+
+## Part 3: Get API Credentials (3 minutes)
+
+### Step 4: Create API Key for Kafka
+
+1. Click **"API keys"** (left sidebar under cluster)
+2. Click **"Create key"**
+3. Choose **"Global access"**
+4. Click **"Next"**
+5. **IMPORTANT**: Copy and save:
+   - **API Key**: `XXXXXXXXXXXXXXXX`
+   - **API Secret**: `YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY`
+6. Click **"I have saved my API key pair"**
+
+### Step 5: Get Bootstrap Server URL
+
+1. Click **"Cluster settings"** (left sidebar)
+2. Find **"Bootstrap server"**
+3. Copy the URL (looks like): `pkc-xxxxx.us-east-1.aws.confluent.cloud:9092`
+
+---
+
+## Part 4: Update Your Simulator (5 minutes)
+
+### Step 6: Install Confluent Kafka Python Client
+
+```powershell
+cd "c:\Users\Fnuas\Desktop\SPRING_2026\interview prep\proejct_proto\poc"
+& "..\.venv\Scripts\pip.exe" install confluent-kafka
+```
+
+### Step 7: Create Confluent Config File
+
+Create `configs/confluent.properties`:
+
+```properties
+# Kafka Cluster
+bootstrap.servers=pkc-xxxxx.us-east-1.aws.confluent.cloud:9092
+
+# Authentication
+security.protocol=SASL_SSL
+sasl.mechanisms=PLAIN
+sasl.username=YOUR_API_KEY
+sasl.password=YOUR_API_SECRET
+
+# Topic
+topic=card-events
+```
+
+**Replace**:
+- `pkc-xxxxx...` with your bootstrap server
+- `YOUR_API_KEY` with your API key
+- `YOUR_API_SECRET` with your API secret
+
+### Step 8: Update Simulator for Confluent Cloud
+
+Create `src/simulator/confluent_main.py`:
+
+```python
+"""
+Simulator for Confluent Cloud
+"""
+import argparse
+import json
+import random
+import time
+from confluent_kafka import Producer
+
+from src.common.schema import random_event
+
+
+def delivery_report(err, msg):
+    """Callback for message delivery"""
+    if err is not None:
+        print(f'Message delivery failed: {err}')
+    else:
+        print(f'Message delivered to {msg.topic()} [{msg.partition()}]')
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="configs/confluent.properties")
+    parser.add_argument("--user-count", type=int, default=1000)
+    parser.add_argument("--events-per-second", type=int, default=10)
+    args = parser.parse_args()
+    
+    # Load config
+    config = {}
+    with open(args.config) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#'):
+                key, value = line.split('=', 1)
+                config[key.strip()] = value.strip()
+    
+    topic = config.pop('topic')
+    
+    # Create producer
+    producer = Producer(config)
+    
+    print(f"Publishing to Confluent Cloud topic: {topic}")
+    print(f"Events per second: {args.events_per_second}")
+    print("Press Ctrl+C to stop\n")
+    
+    try:
+        while True:
+            user_id = f"u{random.randint(1, args.user_count):06d}"
+            event = random_event(user_id)
+            
+            # Send to Confluent Cloud
+            producer.produce(
+                topic,
+                value=json.dumps(event).encode('utf-8'),
+                callback=delivery_report
+            )
+            
+            producer.poll(0)  # Trigger callbacks
+            time.sleep(1 / max(args.events_per_second, 1))
+    
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+    
+    finally:
+        producer.flush()
+        print("All messages sent")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+## Part 5: Create ksqlDB Application (5 minutes)
+
+### Step 9: Create ksqlDB Cluster
+
+1. In Confluent Cloud, click **"ksqlDB"** (left sidebar)
+2. Click **"Create cluster"**
+3. Settings:
+   - **Cluster name**: `streaming-processor`
+   - **Cluster size**: `1 CSU` (free tier)
+   - **Region**: Same as your Kafka cluster
+4. Click **"Continue"**
+5. Click **"Launch cluster"**
+6. ⏳ Wait 3-5 minutes for ksqlDB to start
+
+### Step 10: Create Stream from Kafka Topic
+
+1. Once ksqlDB cluster is running, click on it
+2. Click **"Editor"** tab
+3. Paste this SQL and click **"Run query"**:
+
+```sql
+-- Create stream from card-events topic
+CREATE STREAM card_events_stream (
+  event_id STRING,
+  user_id STRING,
+  event_time STRING,
+  event_type STRING,
+  amount DOUBLE,
+  merchant_id STRING,
+  channel STRING,
+  is_cash_advance BOOLEAN
+) WITH (
+  KAFKA_TOPIC='card-events',
+  VALUE_FORMAT='JSON',
+  TIMESTAMP='event_time',
+  TIMESTAMP_FORMAT='yyyy-MM-dd''T''HH:mm:ss.SSSSSSXXX'
+);
+```
+
+**Expected**: `Stream created`
+
+### Step 11: Create Windowed Aggregation
+
+Paste and run:
+
+```sql
+-- Create windowed aggregation table
+CREATE TABLE churn_scores_raw WITH (
+  KAFKA_TOPIC='churn-scores-raw',
+  VALUE_FORMAT='JSON'
+) AS
+SELECT 
+  user_id,
+  WINDOWSTART AS window_start,
+  WINDOWEND AS window_end,
+  
+  -- Aggregations
+  COUNT_IF(event_type = 'decline') AS decline_count,
+  COUNT_IF(event_type = 'dispute') AS dispute_count,
+  SUM(CASE WHEN is_cash_advance THEN amount ELSE 0 END) AS cash_advance_amount,
+  SUM(CASE WHEN event_type = 'transaction' THEN amount ELSE 0 END) AS spend_amount,
+  
+  -- Spend drop proxy
+  CASE WHEN SUM(CASE WHEN event_type = 'transaction' THEN amount ELSE 0 END) < 50 
+       THEN 1 ELSE 0 END AS spend_drop_proxy,
+  
+  -- Churn score calculation
+  LEAST(1.0, 
+    0.1 + 
+    0.15 * COUNT_IF(event_type = 'decline') + 
+    0.2 * COUNT_IF(event_type = 'dispute') + 
+    0.2 * CASE WHEN SUM(CASE WHEN event_type = 'transaction' THEN amount ELSE 0 END) < 50 THEN 1 ELSE 0 END +
+    0.2 * (SUM(CASE WHEN is_cash_advance THEN amount ELSE 0 END) / 500.0)
+  ) AS churn_score,
+  
+  'velocity_signals' AS risk_reason
+  
+FROM card_events_stream
+WINDOW TUMBLING (SIZE 30 SECONDS)
+GROUP BY user_id
+EMIT CHANGES;
+```
+
+**Expected**: `Table created and running`
+
+### Step 12: Create High-Risk Filter
+
+Paste and run:
+
+```sql
+-- Filter high-risk users
+CREATE TABLE high_risk_profiles WITH (
+  KAFKA_TOPIC='high-risk-profiles',
+  VALUE_FORMAT='JSON'
+) AS
+SELECT *
+FROM churn_scores_raw
+WHERE churn_score > 0.8
+EMIT CHANGES;
+```
+
+**Expected**: `Table created and running`
+
+---
+
+## Part 6: Run the Pipeline (5 minutes)
+
+### Step 13: Start Simulator
+
+```powershell
+cd "c:\Users\Fnuas\Desktop\SPRING_2026\interview prep\proejct_proto\poc"
+& "..\.venv\Scripts\python.exe" -m src.simulator.confluent_main --config configs/confluent.properties
+```
+
+**Expected output**:
+```
+Publishing to Confluent Cloud topic: card-events
+Events per second: 10
+Press Ctrl+C to stop
+
+Message delivered to card-events [0]
+Message delivered to card-events [0]
+...
+```
+
+### Step 14: Monitor ksqlDB Processing
+
+1. In Confluent Cloud ksqlDB editor, run:
+
+```sql
+-- View processed scores
+SELECT * FROM churn_scores_raw EMIT CHANGES;
+```
+
+2. You should see rows appearing every 30 seconds!
+
+3. Check high-risk users:
+
+```sql
+-- View high-risk users
+SELECT * FROM high_risk_profiles EMIT CHANGES;
+```
+
+---
+
+## Part 7: Connect to Snowflake (5 minutes)
+
+### Step 15: Create Snowflake Sink Connector
+
+1. In Confluent Cloud, click **"Connectors"** (left sidebar)
+2. Click **"Add connector"**
+3. Search for **"Snowflake Sink"**
+4. Click **"Snowflake Sink"**
+5. Configure:
+
+**Kafka cluster**: Select your cluster
+
+**Authentication**:
+- **Kafka API Key**: Use the one you created earlier
+
+**Configuration**:
+```json
+{
+  "topics": "churn-scores-raw,high-risk-profiles",
+  "input.data.format": "JSON",
+  "connector.class": "SnowflakeSink",
+  "name": "SnowflakeSinkConnector",
+  "kafka.auth.mode": "KAFKA_API_KEY",
+  "kafka.api.key": "YOUR_API_KEY",
+  "kafka.api.secret": "YOUR_API_SECRET",
+  "snowflake.url.name": "rwzcwwx-tv97893.snowflakecomputing.com",
+  "snowflake.user.name": "AN05893N",
+  "snowflake.private.key": "YOUR_SNOWFLAKE_PASSWORD",
+  "snowflake.database.name": "CHURN_DEMO",
+  "snowflake.schema.name": "PUBLIC",
+  "tasks.max": "1"
+}
+```
+
+6. Click **"Continue"**
+7. Review and click **"Launch"**
+
+**Note**: Snowflake connector requires password or key-pair auth. You may need to set up Snowflake key-pair authentication.
+
+---
+
+## Alternative: Python Consumer for Snowflake
+
+If the connector is complex, use Python to read from ksqlDB output topics:
+
+Create `src/streaming/confluent_to_snowflake.py`:
+
+```python
+"""
+Read from ksqlDB output topics and write to Snowflake
+"""
+import json
+import os
+from confluent_kafka import Consumer
+import pandas as pd
+import snowflake.connector
+from snowflake.connector.pandas_tools import write_pandas
+
+
+def main():
+    # Confluent config
+    config = {
+        'bootstrap.servers': 'YOUR_BOOTSTRAP_SERVER',
+        'security.protocol': 'SASL_SSL',
+        'sasl.mechanisms': 'PLAIN',
+        'sasl.username': 'YOUR_API_KEY',
+        'sasl.password': 'YOUR_API_SECRET',
+        'group.id': 'snowflake-writer',
+        'auto.offset.reset': 'earliest'
+    }
+    
+    consumer = Consumer(config)
+    consumer.subscribe(['churn-scores-raw', 'high-risk-profiles'])
+    
+    print("Consuming from ksqlDB output topics...")
+    
+    try:
+        while True:
+            msg = consumer.poll(1.0)
+            if msg is None:
+                continue
+            
+            if msg.error():
+                print(f"Error: {msg.error()}")
+                continue
+            
+            # Parse message
+            data = json.loads(msg.value().decode('utf-8'))
+            topic = msg.topic()
+            
+            # Write to Snowflake
+            table = 'CHURN_SCORES_RAW' if topic == 'churn-scores-raw' else 'HIGH_RISK_PROFILES'
+            write_to_snowflake([data], table)
+            
+            print(f"✓ Wrote to Snowflake.{table}")
+    
+    except KeyboardInterrupt:
+        pass
+    finally:
+        consumer.close()
+
+
+def write_to_snowflake(rows, table_name):
+    conn = snowflake.connector.connect(
+        account=os.getenv("SNOWFLAKE_ACCOUNT"),
+        user=os.getenv("SNOWFLAKE_USER"),
+        password=os.getenv("SNOWFLAKE_PASSWORD"),
+        role=os.getenv("SNOWFLAKE_ROLE"),
+        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
+        database=os.getenv("SNOWFLAKE_DATABASE"),
+        schema=os.getenv("SNOWFLAKE_SCHEMA"),
+    )
+    
+    try:
+        df = pd.DataFrame(rows)
+        write_pandas(conn, df, table_name, quote_identifiers=False)
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+## Summary
+
+### What You've Built
+
+```
+Simulator (Windows)
+    ↓
+Confluent Cloud Kafka (managed)
+    ↓
+ksqlDB (managed streaming SQL)
+    ↓
+Snowflake Connector OR Python consumer
+    ↓
+Snowflake
+```
+
+### No More Issues!
+
+- ✅ No Spark
+- ✅ No Hadoop
+- ✅ No WSL
+- ✅ No Windows compatibility issues
+- ✅ Fully managed
+- ✅ Professional architecture
+
+### Cost
+
+- **30 days free** with Confluent Cloud trial
+- After trial: ~$1-5/month for basic cluster (can delete after POC)
+
+---
+
+## Verification
+
+### Check ksqlDB is Processing
+
+In ksqlDB editor:
+```sql
+SELECT * FROM churn_scores_raw EMIT CHANGES LIMIT 10;
+```
+
+### Check Snowflake
+
+```powershell
+& "..\.venv\Scripts\python.exe" scripts\check_snowflake.py
+```
+
+---
+
+## Troubleshooting
+
+### Simulator can't connect
+- Verify API key/secret are correct
+- Check bootstrap server URL
+- Ensure `confluent-kafka` is installed
+
+### ksqlDB queries fail
+- Check stream was created successfully
+- Verify topic has data: Click "Topics" → "card-events" → "Messages"
+- Check ksqlDB logs in "Flow" tab
+
+### No data in Snowflake
+- Verify connector is running (green status)
+- Check connector logs for errors
+- Ensure Snowflake tables exist
+
+---
+
+**You're done!** This is a production-grade streaming architecture with zero Spark/Hadoop issues! 🎉

@@ -1,0 +1,10 @@
+# Ignore everything by default
+*
+
+# Allow the main project folder
+!/churn-intelligence-snowflake
+!/churn-intelligence-snowflake/**
+
+# Allow git metadata
+!.gitignore
+!.git/
