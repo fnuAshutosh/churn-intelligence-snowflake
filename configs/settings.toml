@@ -1,13 +1,13 @@
 [snowflake]
-account = "rwzcwwx-tv97893"  # Replace with env var in production
-user = "AN05893N"            # Replace with env var in production
-role = "ACCOUNTADMIN"
-warehouse = "BANKING"
-database = "CHURN_DEMO"
-schema = "PUBLIC"
+account = ""
+user = ""
+role = ""
+warehouse = ""
+database = ""
+schema = ""
 
 [kafka]
-bootstrap_servers = "pkc-1234.us-east-1.aws.confluent.cloud:9092"
+bootstrap_servers = ""
 security_protocol = "SASL_SSL"
 sasl_mechanism = "PLAIN"
 topic = "card_transactions"

@@ -1,0 +1,61 @@
+
+name: churn_metrics_model
+tables:
+  - name: CHURN_METRICS_LIVE
+    base_table:
+      database: CHURN_DEMO
+      schema: PUBLIC
+      table: CHURN_METRICS_LIVE
+    filters:
+      - name: critical_risk
+        expr: "RISK_STATUS = 'CRITICAL'"
+        description: "Users who are flagged as critical churn risk (Score > 0.8)"
+    columns:
+      - name: USER_ID
+        kind: dimension
+        expr: USER_ID
+        synonyms: ["customer id", "client id", "user"]
+        description: "Unique identifier for the bank customer"
+        data_type: TEXT
+        
+      - name: MAX_CHURN_SCORE_10M
+        kind: measure
+        expr: MAX_CHURN_SCORE_10M
+        synonyms: ["risk score", "churn probability", "likelihood to leave"]
+        description: "The probability (0.0 to 1.0) that a user will churn, calculated over the last 10 minutes."
+        data_type: FLOAT
+        
+      - name: TOTAL_DECLINES_10M
+        kind: measure
+        expr: TOTAL_DECLINES_10M
+        synonyms: ["failed transactions", "declines", "payment failures"]
+        description: "Count of declined transactions in the window."
+        data_type: INTEGER
+        
+      - name: TOTAL_SPEND_10M
+        kind: measure
+        expr: TOTAL_SPEND_10M
+        synonyms: ["spending", "transaction volume", "money spent"]
+        description: "Total amount spent by the user in the window."
+        data_type: FLOAT
+
+      - name: RISK_STATUS
+        kind: dimension
+        expr: RISK_STATUS
+        synonyms: ["risk level", "safety status"]
+        description: "Categorical risk level: SAFE, AT_RISK, or CRITICAL."
+        sample_values: ["SAFE", "CRITICAL", "AT_RISK"]
+        data_type: TEXT
+
+  - name: HIGH_RISK_ALERTS_HISTORY
+    base_table:
+      database: CHURN_DEMO
+      schema: PUBLIC
+      table: HIGH_RISK_ALERTS_HISTORY
+    columns:
+      - name: PREPARED_EMAIL
+        kind: dimension
+        expr: PREPARED_EMAIL
+        synonyms: ["draft email", "retention offer", "message"]
+        description: "The AI-generated email content prepared for the user."
+        data_type: TEXT

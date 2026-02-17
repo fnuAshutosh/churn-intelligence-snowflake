@@ -6,11 +6,24 @@ def get_connection():
     return snowflake.connector.connect(**params)
 
 def setup_pipeline():
-    conn = get_connection()
+    # Load params but connect without DB/Schema first to create them
+    params = get_snowflake_connection_params()
+    base_params = params.copy()
+    db_name = base_params.pop('database', 'CHURN_DEMO')
+    schema_name = base_params.pop('schema', 'PUBLIC')
+    
+    conn = snowflake.connector.connect(**base_params)
     cursor = conn.cursor()
-    print("Setting up Snowflake Data Pipeline")
+    print(f"Setting up Snowflake Infrastructure on {db_name}.{schema_name}")
 
     try:
+        # 0. Infrastructure
+        print(f"-> Creating Database {db_name} and Schema {schema_name}...")
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db_name}")
+        cursor.execute(f"USE DATABASE {db_name}")
+        cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
+        cursor.execute(f"USE SCHEMA {schema_name}")
+
         # 1. Base Tables
         print("-> Configuring Base Tables...")
         cursor.execute("CREATE TABLE IF NOT EXISTS CHURN_SCORES_RAW (USER_ID VARCHAR, WINDOW_START VARCHAR, WINDOW_END VARCHAR, CHURN_SCORE FLOAT, DECLINE_COUNT INT, DISPUTE_COUNT INT, SPEND_AMOUNT FLOAT, INGESTION_TIME TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP())")
@@ -31,8 +44,8 @@ def setup_pipeline():
         print("-> Creating Dynamic Table (Declarative ETL)...")
         dt_sql = """
         CREATE OR REPLACE DYNAMIC TABLE CHURN_METRICS_LIVE
-            TARGET_LAG = '1 minute'
-            WAREHOUSE = BANKING
+            TARGET_LAG = 'DOWNSTREAM' -- Changed from 1 min to save credits
+            WAREHOUSE = BANK_WAREHOUSE
             AS
             SELECT 
                 USER_ID,
@@ -61,27 +74,34 @@ def setup_pipeline():
         print("-> Configuring Tasks...")
         task_sql = """
         CREATE OR REPLACE TASK PROCESS_ALERTS_TASK
-            WAREHOUSE = BANKING
-            SCHEDULE = '1 MINUTE'
+            WAREHOUSE = BANK_WAREHOUSE
+            SCHEDULE = '1440 MINUTE'
         WHEN
             SYSTEM$STREAM_HAS_DATA('CHURN_METRICS_STREAM')
         AS
             INSERT INTO HIGH_RISK_ALERTS_HISTORY (USER_ID, RISK_SCORE, REASON, PREPARED_EMAIL)
             SELECT 
-                USER_ID, 
-                MAX_CHURN_SCORE_10M, 
+                s.USER_ID, 
+                s.MAX_CHURN_SCORE_10M, 
                 'CRITICAL_RISK_DETECTED',
-                -- Safe call to GenAI Agent (if exists), else NULL
-                CASE WHEN (SELECT COUNT(*) FROM INFORMATION_SCHEMA.FUNCTIONS WHERE FUNCTION_NAME = 'GENERATE_RETENTION_EMAIL') > 0 
-                     THEN GENERATE_RETENTION_EMAIL(USER_ID, MAX_CHURN_SCORE_10M, 'CRITICAL_RISK_DETECTED')
-                     ELSE NULL 
-                END
-            FROM CHURN_METRICS_STREAM
-            WHERE METADATA$ACTION = 'INSERT' 
-              AND RISK_STATUS = 'CRITICAL'
+                GENERATE_RETENTION_EMAIL(
+                    s.USER_ID, 
+                    s.MAX_CHURN_SCORE_10M, 
+                    'CRITICAL_RISK_DETECTED',
+                    -- RAG Logic: Fetch context from Knowledge Base
+                    kb.TRANSCRIPT_TEXT
+                )
+            FROM CHURN_METRICS_STREAM s
+            LEFT JOIN (
+                SELECT USER_ID, LISTAGG(TRANSCRIPT_TEXT, '. ') WITHIN GROUP (ORDER BY CREATED_AT DESC) as TRANSCRIPT_TEXT
+                FROM CUSTOMER_INTERACTION_TRANSCRIPTS
+                GROUP BY USER_ID
+            ) kb ON s.USER_ID = kb.USER_ID
+            WHERE s.METADATA$ACTION = 'INSERT' 
+              AND s.RISK_STATUS = 'CRITICAL'
         """
         cursor.execute(task_sql)
-        cursor.execute("ALTER TASK PROCESS_ALERTS_TASK RESUME")
+        # cursor.execute("ALTER TASK PROCESS_ALERTS_TASK RESUME") -- Safe Mode: Keep suspended
 
         print("Pipeline Setup Complete")
 

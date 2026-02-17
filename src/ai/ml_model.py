@@ -6,6 +6,9 @@ def setup_ml_pipeline():
     conn = snowflake.connector.connect(**params)
     cursor = conn.cursor()
     print("Creating Snowpark ML Objects...")
+    
+    cursor.execute(f"USE DATABASE {params.get('database', 'CHURN_DEMO')}")
+    cursor.execute(f"USE SCHEMA {params.get('schema', 'PUBLIC')}")
 
     try:
         cursor.execute("CREATE STAGE IF NOT EXISTS MODEL_STAGE")
@@ -21,27 +24,27 @@ def setup_ml_pipeline():
         HANDLER = 'train_model'
         AS
         $$
-        import snowflake.snowpark as snowpark
-        from sklearn.ensemble import RandomForestClassifier
-        import pandas as pd
-        import joblib
-        import os
+import snowflake.snowpark as snowpark
+from sklearn.ensemble import RandomForestClassifier
+import pandas as pd
+import joblib
+import os
 
-        def train_model(session):
-            df = session.table("CHURN_SCORES_RAW").to_pandas()
-            if len(df) < 5:
-                return "Not enough data to train."
+def train_model(session):
+    df = session.table("CHURN_SCORES_RAW").to_pandas()
+    if len(df) < 5:
+        return "Not enough data to train. Need at least 5 rows."
 
-            df['TARGET'] = (df['CHURN_SCORE'] > 0.8).astype(int)
-            X = df[['DECLINE_COUNT', 'DISPUTE_COUNT', 'SPEND_AMOUNT']]
-            y = df['TARGET']
-            
-            clf = RandomForestClassifier(n_estimators=10)
-            clf.fit(X, y)
-            
-            joblib.dump(clf, '/tmp/churn_rf.joblib')
-            session.file.put('/tmp/churn_rf.joblib', "@MODEL_STAGE", auto_compress=False, overwrite=True)
-            return "Success: Trained Random Forest"
+    df['TARGET'] = (df['CHURN_SCORE'] > 0.8).astype(int)
+    X = df[['DECLINE_COUNT', 'DISPUTE_COUNT', 'SPEND_AMOUNT']]
+    y = df['TARGET']
+    
+    clf = RandomForestClassifier(n_estimators=10)
+    clf.fit(X, y)
+    
+    joblib.dump(clf, '/tmp/churn_rf.joblib')
+    session.file.put('/tmp/churn_rf.joblib', "@MODEL_STAGE", auto_compress=False, overwrite=True)
+    return "Success: Trained Random Forest"
         $$;
         """
         cursor.execute(sp_sql)

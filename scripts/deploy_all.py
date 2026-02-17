@@ -24,12 +24,17 @@ def main():
     print("\n[Stage 1/3] Deploying Data Engineering Pipeline...")
     setup_pipeline()
     
-    # 2. AI Agent (Cortex)
-    print("\n[Stage 2/3] Deploying Cortex AI Agent...")
+    # 2. AI Agent (Cortex Functions)
+    print("\n[Stage 2/4] Deploying Cortex AI Agent...")
     setup_agent()
+
+    # 3. Knowledge Base (Cortex Search)
+    print("\n[Stage 3/4] Deploying Cortex Knowledge Base...")
+    from src.snowflake_ops.knowledge_base import setup_knowledge_base
+    setup_knowledge_base()
     
-    # 3. Machine Learning (Snowpark)
-    print("\n[Stage 3/3] Deploying ML Models & Inference...")
+    # 4. Machine Learning (Snowpark)
+    print("\n[Stage 4/4] Deploying ML Models & Inference...")
     setup_ml_pipeline()
     
     print("\n" + "=" * 60)

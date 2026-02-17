@@ -6,24 +6,34 @@ def setup_agent():
     conn = snowflake.connector.connect(**params)
     cursor = conn.cursor()
     print("Deploying Cortex Agent...")
+    
+    cursor.execute(f"USE DATABASE {params.get('database', 'CHURN_DEMO')}")
+    cursor.execute(f"USE SCHEMA {params.get('schema', 'PUBLIC')}")
 
-    # Define Llama 3 Prompt
+    # Define Llama 3 Prompt with RAG Context
     prompt_template = """
     'You are a retention specialist for a premium bank.
-    User ID: ' || user_id || '.
-    Risk Score: ' || risk_score || '.
-    Reason: ' || reason || '.
-    Write a short, polite email offering a $50 statement credit.
+    
+    User ID: ' || user_id || '
+    Risk Score: ' || risk_score || '
+    Reason: ' || reason || '
+    
+    Latest Interaction Context: ' || COALESCE(customer_context, 'No recent support tickets found.') || '
+    
+    Task: Write a short, empathetic email offering a solution. 
+    IF the context mentions specific complaints (e.g., fees), address them directly and offer a relevant solution (e.g., fee waiver).
+    OTHERWISE, offer a generic $50 statement credit.
+    
     Sign off as "The Data Team".'
     """
     
     sql_func = f"""
-    CREATE OR REPLACE FUNCTION GENERATE_RETENTION_EMAIL(user_id VARCHAR, risk_score FLOAT, reason VARCHAR)
+    CREATE OR REPLACE FUNCTION GENERATE_RETENTION_EMAIL(user_id VARCHAR, risk_score FLOAT, reason VARCHAR, customer_context VARCHAR)
     RETURNS VARCHAR
     LANGUAGE SQL
     AS
     $$
-        SNOWFLAKE.CORTEX.COMPLETE('llama3-8b', {prompt_template})
+        SNOWFLAKE.CORTEX.COMPLETE('snowflake-arctic', {prompt_template})
     $$;
     """
 

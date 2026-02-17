@@ -1,22 +1,24 @@
+import sys
+from pathlib import Path
 import snowflake.connector
 import os
-import random
 
-# For demo, we might want to clean up env loading
-# Assuming environment variables are set or using placeholders
-# We can use the 'src.core.config' if we want to be fancy.
-# But for a simple script, os.getenv is fine if we export vars first.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.append(str(PROJECT_ROOT))
 
-# We will just reuse the standard credentials pattern for simplicity
+from src.core.config import load_config
+
 def get_connection():
+    config = load_config()
+    conf = config['snowflake']
     return snowflake.connector.connect(
-        account=os.getenv("SNOWFLAKE_ACCOUNT"),
-        user=os.getenv("SNOWFLAKE_USER"),
-        password=os.getenv("SNOWFLAKE_PASSWORD"),
-        role=os.getenv("SNOWFLAKE_ROLE", "ACCOUNTADMIN"),
-        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "BANKING"),
-        database=os.getenv("SNOWFLAKE_DATABASE", "CHURN_DEMO"),
-        schema=os.getenv("SNOWFLAKE_SCHEMA", "PUBLIC")
+        account=conf['account'],
+        user=conf['user'],
+        password=conf['password'],
+        role=conf['role'],
+        warehouse=conf['warehouse'],
+        database=conf['database'],
+        schema=conf['schema']
     )
 
 def inject_demo_user(user_id="u_DEMO_VIDEO"):

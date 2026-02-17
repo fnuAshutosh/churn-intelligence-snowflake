@@ -1,14 +1,23 @@
+import sys
+from pathlib import Path
 import snowflake.connector
-import os
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.append(str(PROJECT_ROOT))
+
+from src.core.config import load_config
+
+config = load_config()
+conf = config['snowflake']
 
 conn = snowflake.connector.connect(
-    account=os.getenv("SNOWFLAKE_ACCOUNT"),
-    user=os.getenv("SNOWFLAKE_USER"),
-    password=os.getenv("SNOWFLAKE_PASSWORD"),
-    role=os.getenv("SNOWFLAKE_ROLE"),
-    warehouse='BANKING',
-    database='CHURN_DEMO',
-    schema='PUBLIC'
+    account=conf['account'],
+    user=conf['user'],
+    password=conf['password'],
+    role=conf['role'],
+    warehouse=conf['warehouse'],
+    database=conf['database'],
+    schema=conf['schema']
 )
 
 cursor = conn.cursor()
@@ -17,7 +26,8 @@ cursor.execute("SELECT USER_ID, PREPARED_EMAIL FROM HIGH_RISK_ALERTS_HISTORY WHE
 rows = cursor.fetchall()
 
 if rows:
-    print(f"✅ FOUND! Email: {rows[0][1][:50]}...")
+    email_content = rows[0][1]
+    print(f"✅ FOUND! Full Email Content:\n{'-'*60}\n{email_content}\n{'-'*60}")
 else:
     print("⏳ Not found yet. Task might still be running.")
 
