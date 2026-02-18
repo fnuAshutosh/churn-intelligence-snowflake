@@ -22,8 +22,6 @@ from kafka.errors import NoBrokersAvailable
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.core.config import get_snowflake_connection_params
 
-sys.stdout.reconfigure(encoding="utf-8")
-
 TOPIC       = "bank_transactions"
 FLUSH_SIZE  = 500    # flush after this many messages
 FLUSH_SECS  = 5      # or after this many seconds

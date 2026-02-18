@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.3.0
@@ -29,7 +27,9 @@ services:
     build: .
     container_name: churn_setup
     command: python scripts/setup.py
-    env_file: .env
+    env_file:
+      - path: .env
+        required: true
     environment:
       - SNOWFLAKE_WAREHOUSE=${SNOWFLAKE_WAREHOUSE:-BANK_WAREHOUSE}
       - SNOWFLAKE_DATABASE=${SNOWFLAKE_DATABASE:-CHURN_DEMO}
@@ -40,7 +40,9 @@ services:
     build: .
     container_name: churn_cortex
     command: python scripts/deploy_cortex.py
-    env_file: .env
+    env_file:
+      - path: .env
+        required: true
     environment:
       - SNOWFLAKE_WAREHOUSE=${SNOWFLAKE_WAREHOUSE:-BANK_WAREHOUSE}
       - SNOWFLAKE_DATABASE=${SNOWFLAKE_DATABASE:-CHURN_DEMO}
@@ -64,7 +66,9 @@ services:
     build: .
     container_name: kafka_consumer
     command: python streaming/consumer.py
-    env_file: .env
+    env_file:
+      - path: .env
+        required: true
     depends_on:
       - kafka
       - setup

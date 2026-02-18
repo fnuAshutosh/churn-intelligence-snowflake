@@ -1,0 +1,12 @@
+.venv
+.venv-wsl
+.venv_stable
+__pycache__
+*.pyc
+*.pyo
+.git
+.env
+*.egg-info
+dist
+build
+.DS_Store

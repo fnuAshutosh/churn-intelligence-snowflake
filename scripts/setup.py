@@ -26,8 +26,6 @@ from faker import Faker
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.core.config import get_snowflake_connection_params
 
-sys.stdout.reconfigure(encoding="utf-8")
-
 fake = Faker()
 Faker.seed(42)
 random.seed(42)
@@ -219,12 +217,15 @@ def create_dynamic_tables(cur):
 
 # ── Step 4: Stream ────────────────────────────────────────────────────────────
 def create_stream(cur):
-    print("\n[4/7] Creating stream on DYN_CHURN_PREDICTIONS...")
+    print("\n[4/7] Creating stream on FACT_TRANSACTION_LEDGER...")
+    # NOTE: Snowflake streams on Dynamic Tables require INCREMENTAL refresh mode.
+    # We stream on the raw transactions table instead — new transactions are what
+    # drive churn score changes, so this is semantically equivalent.
     run(cur, """
-        CREATE OR REPLACE STREAM STREAM_HIGH_RISK_CUSTOMERS
-            ON DYNAMIC TABLE DYN_CHURN_PREDICTIONS
-            SHOW_INITIAL_ROWS = FALSE
-    """, "STREAM_HIGH_RISK_CUSTOMERS")
+        CREATE OR REPLACE STREAM STREAM_NEW_TRANSACTIONS
+            ON TABLE FACT_TRANSACTION_LEDGER
+            APPEND_ONLY = TRUE
+    """, "STREAM_NEW_TRANSACTIONS")
 
 
 # ── Step 5: Stored procedure ──────────────────────────────────────────────────
@@ -282,7 +283,7 @@ def create_task(cur):
         CREATE OR REPLACE TASK TASK_GENERATE_EMAILS
             WAREHOUSE = BANK_WAREHOUSE
             SCHEDULE  = '5 MINUTES'
-            WHEN SYSTEM$STREAM_HAS_DATA('CHURN_DEMO.PUBLIC.STREAM_HIGH_RISK_CUSTOMERS')
+            WHEN SYSTEM$STREAM_HAS_DATA('CHURN_DEMO.PUBLIC.STREAM_NEW_TRANSACTIONS')
         AS
             CALL PROC_GENERATE_RETENTION_EMAILS()
     """, "TASK_GENERATE_EMAILS")

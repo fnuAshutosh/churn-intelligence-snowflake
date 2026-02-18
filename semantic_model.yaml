@@ -2,39 +2,61 @@ name: BankCo Churn Intelligence
 description: >
   Semantic model for the BankCo Churn Intelligence Platform.
   Enables Cortex Analyst to answer natural language questions about
-  customer churn risk, transaction patterns, and AI-generated interventions.
+  customer churn risk, transaction patterns, support sentiment,
+  and AI-generated retention email interventions.
 
 tables:
-  - name: DYN_CHURN_PREDICTIONS
+  - name: ANALYST_CHURN_VIEW
     description: >
-      Real-time churn risk scores for all customers, refreshed automatically
-      every 5 minutes by a Snowflake Dynamic Table.
-    base_table: CHURN_DEMO.PUBLIC.DYN_CHURN_PREDICTIONS
+      Denormalised view combining churn predictions, 30-day behavioural
+      features, and intervention history for every customer.
+      Use this table for all churn-related questions.
+    base_table: CHURN_DEMO.PUBLIC.ANALYST_CHURN_VIEW
     primary_key: CUSTOMER_ID
+
     dimensions:
       - name: CUSTOMER_ID
-        description: Unique customer identifier
+        description: Unique customer identifier (e.g. C12345678)
         expr: CUSTOMER_ID
         data_type: TEXT
       - name: FULL_NAME
         description: Customer full name
         expr: FULL_NAME
         data_type: TEXT
-      - name: SEGMENT
-        description: Customer segment (Young Professional, Student, Established, High Net Worth)
-        expr: SEGMENT
-        data_type: TEXT
       - name: EMAIL
         description: Customer email address
         expr: EMAIL
         data_type: TEXT
+      - name: SEGMENT
+        description: >
+          Customer segment. One of:
+          'Young Professional', 'Student', 'Established', 'High Net Worth'
+        expr: SEGMENT
+        data_type: TEXT
+        sample_values:
+          - Young Professional
+          - Student
+          - Established
+          - High Net Worth
       - name: RISK_CLASS
-        description: Churn risk classification — HIGH (>=0.7), MEDIUM (>=0.4), LOW (<0.4)
+        description: >
+          Churn risk tier. HIGH = score >= 0.7, MEDIUM = 0.4-0.7, LOW = < 0.4
         expr: RISK_CLASS
         data_type: TEXT
+        sample_values:
+          - HIGH
+          - MEDIUM
+          - LOW
+      - name: EMAIL_SENT_7D
+        description: TRUE if a retention email was sent to this customer in the last 7 days
+        expr: EMAIL_SENT_7D
+        data_type: BOOLEAN
+
     measures:
       - name: CHURN_SCORE
-        description: Churn probability score from 0.0 (no risk) to 1.0 (certain churn)
+        description: >
+          Churn probability score from 0.0 (no risk) to 1.0 (certain churn).
+          Computed by the DYN_CHURN_PREDICTIONS dynamic table every 5 minutes.
         expr: CHURN_SCORE
         data_type: NUMBER
         agg: AVG
@@ -43,45 +65,61 @@ tables:
         expr: CUSTOMER_ID
         data_type: NUMBER
         agg: COUNT_DISTINCT
+      - name: TXN_COUNT_30D
+        description: Number of transactions in the last 30 days
+        expr: TXN_COUNT_30D
+        data_type: NUMBER
+        agg: AVG
+      - name: TOTAL_SPEND_30D
+        description: Total spend (USD) in the last 30 days
+        expr: TOTAL_SPEND_30D
+        data_type: NUMBER
+        agg: SUM
+      - name: WIRE_OUT_30D
+        description: Total wire transfer outflows (USD) in the last 30 days — key churn signal
+        expr: WIRE_OUT_30D
+        data_type: NUMBER
+        agg: SUM
+      - name: ERROR_COUNT_30D
+        description: Number of app errors experienced in the last 30 days
+        expr: ERROR_COUNT_30D
+        data_type: NUMBER
+        agg: AVG
+      - name: SUPPORT_CASES_30D
+        description: Number of support cases opened in the last 30 days
+        expr: SUPPORT_CASES_30D
+        data_type: NUMBER
+        agg: AVG
+      - name: AVG_SENTIMENT
+        description: >
+          Average support sentiment score (0=very negative, 1=very positive).
+          Scores below 0.4 are a strong churn signal.
+        expr: AVG_SENTIMENT
+        data_type: NUMBER
+        agg: AVG
+      - name: ACTIVE_DAYS_30D
+        description: Number of days the customer was active in the app in the last 30 days
+        expr: ACTIVE_DAYS_30D
+        data_type: NUMBER
+        agg: AVG
+
     time_dimensions:
       - name: COMPUTED_AT
-        description: When the churn score was last computed
+        description: When the churn score was last computed by the dynamic table
         expr: COMPUTED_AT
         data_type: TIMESTAMP
-
-  - name: DIM_CUSTOMERS
-    description: Customer master data including segment and join date.
-    base_table: CHURN_DEMO.PUBLIC.DIM_CUSTOMERS
-    primary_key: CUSTOMER_ID
-    dimensions:
-      - name: CUSTOMER_ID
-        expr: CUSTOMER_ID
-        data_type: TEXT
-      - name: FULL_NAME
-        expr: FULL_NAME
-        data_type: TEXT
-      - name: SEGMENT
-        expr: SEGMENT
-        data_type: TEXT
-      - name: EMAIL
-        expr: EMAIL
-        data_type: TEXT
-    measures:
-      - name: TOTAL_CUSTOMERS
-        expr: CUSTOMER_ID
-        data_type: NUMBER
-        agg: COUNT_DISTINCT
-    time_dimensions:
-      - name: JOIN_DATE
-        expr: JOIN_DATE
-        data_type: DATE
+      - name: EMAIL_SENT_AT
+        description: When the most recent retention email was sent (NULL if never)
+        expr: EMAIL_SENT_AT
+        data_type: TIMESTAMP
 
   - name: AGENT_INTERVENTION_LOG
     description: >
-      Log of AI-generated retention emails sent to high-risk customers.
+      Full history of AI-generated retention emails sent to high-risk customers.
       Each row is one email generated by Cortex LLM (llama3-8b).
     base_table: CHURN_DEMO.PUBLIC.AGENT_INTERVENTION_LOG
     primary_key: INTERVENTION_ID
+
     dimensions:
       - name: INTERVENTION_ID
         expr: INTERVENTION_ID
@@ -93,75 +131,73 @@ tables:
         description: Full text of the AI-generated retention email
         expr: GENERATED_EMAIL
         data_type: TEXT
+
     measures:
       - name: CHURN_SCORE_AT_INTERVENTION
+        description: The churn score at the time the email was generated
         expr: CHURN_SCORE
         data_type: NUMBER
         agg: AVG
       - name: EMAILS_SENT
+        description: Total number of retention emails generated
         expr: INTERVENTION_ID
         data_type: NUMBER
         agg: COUNT
+
     time_dimensions:
       - name: CREATED_AT
+        description: When the email was generated
         expr: CREATED_AT
         data_type: TIMESTAMP
 
-  - name: APP_ACTIVITY_LOGS
-    description: >
-      App activity events including errors. Used by Cortex Search for
-      unstructured log queries.
-    base_table: CHURN_DEMO.PUBLIC.APP_ACTIVITY_LOGS
-    primary_key: LOG_ID
-    dimensions:
-      - name: LOG_ID
-        expr: LOG_ID
-        data_type: TEXT
-      - name: CUSTOMER_ID
-        expr: CUSTOMER_ID
-        data_type: TEXT
-      - name: EVENT_TYPE
-        expr: EVENT_TYPE
-        data_type: TEXT
-      - name: DEVICE_OS
-        expr: DEVICE_OS
-        data_type: TEXT
-      - name: ERROR_CODE
-        expr: ERROR_CODE
-        data_type: TEXT
-    measures:
-      - name: ERROR_COUNT
-        description: Number of error events
-        expr: CASE WHEN ERROR_CODE IS NOT NULL THEN 1 ELSE 0 END
-        data_type: NUMBER
-        agg: SUM
-      - name: EVENT_COUNT
-        expr: LOG_ID
-        data_type: NUMBER
-        agg: COUNT
-    time_dimensions:
-      - name: EVENT_TIMESTAMP
-        expr: EVENT_TIMESTAMP
-        data_type: TIMESTAMP
-
 relationships:
-  - name: predictions_to_customers
-    left_table: DYN_CHURN_PREDICTIONS
-    right_table: DIM_CUSTOMERS
-    relationship_type: many_to_one
-    left_join_key: CUSTOMER_ID
-    right_join_key: CUSTOMER_ID
-
-  - name: interventions_to_customers
+  - name: interventions_to_churn_view
     left_table: AGENT_INTERVENTION_LOG
-    right_table: DIM_CUSTOMERS
+    right_table: ANALYST_CHURN_VIEW
     relationship_type: many_to_one
     left_join_key: CUSTOMER_ID
     right_join_key: CUSTOMER_ID
 
-  - name: logs_to_customers
-    left_table: APP_ACTIVITY_LOGS
-    right_table: DIM_CUSTOMERS
-    relationship_type: many_to_one
-    left_join_key: CUSTOMER_ID
-    right_join_key: CUSTOMER_ID
+verified_queries:
+  - name: high_risk_customers
+    question: "Show me all high risk customers with their churn scores"
+    sql: >
+      SELECT FULL_NAME, SEGMENT, CHURN_SCORE, EMAIL_SENT_7D
+      FROM ANALYST_CHURN_VIEW
+      WHERE RISK_CLASS = 'HIGH'
+      ORDER BY CHURN_SCORE DESC
+      LIMIT 100
+
+  - name: avg_churn_by_segment
+    question: "What is the average churn score by customer segment?"
+    sql: >
+      SELECT SEGMENT,
+             ROUND(AVG(CHURN_SCORE), 3) AS AVG_CHURN_SCORE,
+             COUNT(*) AS CUSTOMER_COUNT
+      FROM ANALYST_CHURN_VIEW
+      GROUP BY SEGMENT
+      ORDER BY AVG_CHURN_SCORE DESC
+
+  - name: emails_sent_today
+    question: "How many retention emails were sent today?"
+    sql: >
+      SELECT COUNT(*) AS EMAILS_SENT_TODAY
+      FROM AGENT_INTERVENTION_LOG
+      WHERE CREATED_AT >= DATEADD('day', -1, CURRENT_TIMESTAMP())
+
+  - name: high_wire_out_customers
+    question: "Which customers have the highest wire transfer outflows?"
+    sql: >
+      SELECT FULL_NAME, SEGMENT, WIRE_OUT_30D, CHURN_SCORE, RISK_CLASS
+      FROM ANALYST_CHURN_VIEW
+      ORDER BY WIRE_OUT_30D DESC
+      LIMIT 50
+
+  - name: low_sentiment_high_risk
+    question: "Show customers with low sentiment and high churn risk"
+    sql: >
+      SELECT FULL_NAME, SEGMENT, AVG_SENTIMENT, CHURN_SCORE, SUPPORT_CASES_30D
+      FROM ANALYST_CHURN_VIEW
+      WHERE RISK_CLASS = 'HIGH' AND AVG_SENTIMENT < 0.4
+      ORDER BY AVG_SENTIMENT ASC
+      LIMIT 100
