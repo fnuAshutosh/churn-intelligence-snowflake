@@ -165,6 +165,7 @@ def main():
             "Upload dashboard.py to stage")
 
         # Create the Streamlit app object in Snowflake
+        run(cur, "DROP STREAMLIT IF EXISTS CHURN_DASHBOARD", "Drop old dashboard")
         run(cur, """
             CREATE OR REPLACE STREAMLIT CHURN_DASHBOARD
                 ROOT_LOCATION = '@AGENT_ASSETS'

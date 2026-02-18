@@ -2,20 +2,15 @@
 src/app/dashboard.py — Streamlit in Snowflake dashboard.
 
 Deploy via: Snowflake UI → Streamlit → New App → paste this file.
-Or via: CREATE STREAMLIT in deploy_cortex.py
-
-Tabs:
-  1. Overview        — KPIs + segment chart
-  2. High Risk       — sortable customer table
-  3. Live Feed       — real-time transactions + errors
-  4. AI Emails       — retention email viewer
-  5. Cortex Analyst  — natural language → SQL via semantic model
-  6. Cortex Agent    — conversational AI (Search + Analyst)
 """
 
 import streamlit as st
 import json
+import pandas as pd
 from snowflake.snowpark.context import get_active_session
+
+# NOTE: Removed 'snowflake.cortex' import to avoid ModuleNotFoundError.
+# We call the SQL function SNOWFLAKE.CORTEX.COMPLETE directly via session.sql().
 
 st.set_page_config(
     page_title="BankCo Churn Intelligence",
@@ -25,14 +20,23 @@ st.set_page_config(
 
 session = get_active_session()
 
+# Helper for Cortex calls via SQL
+def run_cortex_complete(model, prompt):
+    try:
+        # Escape single quotes for SQL string literal
+        safe_prompt = prompt.replace("'", "''")
+        query = f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{model}', '{safe_prompt}')"
+        result = session.sql(query).collect()[0][0]
+        return result
+    except Exception as e:
+        return f"Error calling Cortex: {e}"
+
 # ── Styling ───────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
   html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-
-  .stApp { background: #0d1117; }
-
+  .stApp { background: #0d1117; color: white; }
   .metric-card {
     background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
     border: 1px solid #0f3460;
@@ -40,348 +44,200 @@ st.markdown("""
     padding: 20px;
     text-align: center;
   }
-  .risk-high   { color: #ef5350; font-weight: 700; }
-  .risk-medium { color: #ffa726; font-weight: 700; }
-  .risk-low    { color: #66bb6a; font-weight: 700; }
-
-  .chat-user { background: #1a237e; border-radius: 12px 12px 2px 12px; padding: 10px 14px; margin: 6px 0; }
-  .chat-bot  { background: #1b5e20; border-radius: 12px 12px 12px 2px; padding: 10px 14px; margin: 6px 0; }
-
-  div[data-testid="stDataFrame"] { border-radius: 8px; overflow: hidden; }
+  .chat-box { background: #16213e; border-radius: 8px; padding: 20px; margin-bottom: 20px; height: 500px; overflow-y: scroll; }
+  .chat-user { 
+      background: #1a237e; 
+      color: white;
+      border-radius: 12px 12px 2px 12px; 
+      padding: 10px 14px; 
+      margin: 8px 0 8px auto; 
+      width: fit-content;
+      max-width: 80%;
+      text-align: right;
+  }
+  .chat-bot  { 
+      background: #1b5e20; 
+      color: white;
+      border-radius: 12px 12px 12px 2px; 
+      padding: 10px 14px; 
+      margin: 8px auto 8px 0; 
+      width: fit-content;
+      max-width: 80%;
+      text-align: left;
+  }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Header ────────────────────────────────────────────────────────────────────
 st.markdown("## 🏦 BankCo Churn Intelligence Platform")
-st.caption("Real-time churn risk · Snowflake Dynamic Tables · Cortex AI · Kafka Streaming")
+st.caption("Real-time churn risk · Snowflake Dynamic Tables · Cortex AI · Kafka")
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📊 Overview",
-    "🔴 High Risk",
-    "📡 Live Feed",
-    "✉️ AI Emails",
-    "🔍 Cortex Analyst",
-    "🤖 Cortex Agent",
+    "📊 Overview", "🔴 High Risk", "📡 Live Feed", "✉️ AI Emails", "🔍 Analyst (SQL)", "🤖 Chat Agent"
 ])
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# TAB 1 — Overview
-# ════════════════════════════════════════════════════════════════════════════
+# ── 1. Overview ───────────────────────────────────────────────────────────────
 with tab1:
     st.subheader("Risk Summary")
-
     summary = session.sql("""
         SELECT
-            COUNT(*)                                                AS TOTAL_CUSTOMERS,
-            SUM(CASE WHEN RISK_CLASS = 'HIGH'   THEN 1 ELSE 0 END) AS HIGH_RISK,
-            SUM(CASE WHEN RISK_CLASS = 'MEDIUM' THEN 1 ELSE 0 END) AS MEDIUM_RISK,
-            SUM(CASE WHEN RISK_CLASS = 'LOW'    THEN 1 ELSE 0 END) AS LOW_RISK,
-            ROUND(AVG(CHURN_SCORE), 3)                              AS AVG_SCORE
+            COUNT(*) AS TOTAL,
+            SUM(CASE WHEN RISK_CLASS = 'HIGH' THEN 1 ELSE 0 END) AS HIGH,
+            SUM(CASE WHEN RISK_CLASS = 'MEDIUM' THEN 1 ELSE 0 END) AS MEDIUM,
+            SUM(CASE WHEN RISK_CLASS = 'LOW' THEN 1 ELSE 0 END) AS LOW,
+            ROUND(AVG(CHURN_SCORE), 3) AS AVG_SCORE
         FROM DYN_CHURN_PREDICTIONS
     """).to_pandas()
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("👥 Total Customers",  f"{summary['TOTAL_CUSTOMERS'][0]:,}")
-    c2.metric("🔴 High Risk",        f"{summary['HIGH_RISK'][0]:,}")
-    c3.metric("🟡 Medium Risk",      f"{summary['MEDIUM_RISK'][0]:,}")
-    c4.metric("🟢 Low Risk",         f"{summary['LOW_RISK'][0]:,}")
-    c5.metric("📈 Avg Churn Score",  f"{summary['AVG_SCORE'][0]:.3f}")
+    c1.metric("Total Customers", f"{summary['TOTAL'][0]:,}")
+    c2.metric("🔴 High Risk",     f"{summary['HIGH'][0]:,}")
+    c3.metric("🟡 Medium Risk",   f"{summary['MEDIUM'][0]:,}")
+    c4.metric("🟢 Low Risk",      f"{summary['LOW'][0]:,}")
+    c5.metric("Avg Score",        f"{summary['AVG_SCORE'][0]}")
 
     st.divider()
+    c_a, c_b = st.columns(2)
+    with c_a:
+        st.subheader("By Segment")
+        df_seg = session.sql("SELECT SEGMENT, AVG(CHURN_SCORE) as SCORE FROM DYN_CHURN_PREDICTIONS GROUP BY 1").to_pandas()
+        st.bar_chart(df_seg.set_index("SEGMENT"))
+    with c_b:
+        st.subheader("Risk Distribution")
+        df_risk = session.sql("SELECT RISK_CLASS, COUNT(*) as N FROM DYN_CHURN_PREDICTIONS GROUP BY 1").to_pandas()
+        st.bar_chart(df_risk.set_index("RISK_CLASS"))
 
-    col_a, col_b = st.columns(2)
-
-    with col_a:
-        st.subheader("Avg Churn Score by Segment")
-        by_seg = session.sql("""
-            SELECT SEGMENT,
-                   ROUND(AVG(CHURN_SCORE), 3) AS AVG_SCORE,
-                   COUNT(*) AS CUSTOMERS
-            FROM DYN_CHURN_PREDICTIONS
-            GROUP BY SEGMENT ORDER BY AVG_SCORE DESC
-        """).to_pandas()
-        st.bar_chart(by_seg.set_index("SEGMENT")["AVG_SCORE"])
-
-    with col_b:
-        st.subheader("Risk Class Distribution")
-        dist = session.sql("""
-            SELECT RISK_CLASS, COUNT(*) AS N
-            FROM DYN_CHURN_PREDICTIONS
-            GROUP BY RISK_CLASS
-        """).to_pandas()
-        st.bar_chart(dist.set_index("RISK_CLASS")["N"])
-
-    st.divider()
-    col_c, col_d, col_e = st.columns(3)
-
-    emails_24h = session.sql("""
-        SELECT COUNT(*) AS N FROM AGENT_INTERVENTION_LOG
-        WHERE CREATED_AT >= DATEADD('day', -1, CURRENT_TIMESTAMP())
-    """).to_pandas()["N"][0]
-    col_c.metric("✉️ Emails Sent (24h)", emails_24h)
-
-    txn_24h = session.sql("""
-        SELECT COUNT(*) AS N FROM FACT_TRANSACTION_LEDGER
-        WHERE POSTING_DATE >= DATEADD('day', -1, CURRENT_TIMESTAMP())
-    """).to_pandas()["N"][0]
-    col_d.metric("💳 Transactions (24h)", f"{txn_24h:,}")
-
-    errors_24h = session.sql("""
-        SELECT COUNT(*) AS N FROM APP_ACTIVITY_LOGS
-        WHERE ERROR_CODE IS NOT NULL
-          AND EVENT_TIMESTAMP >= DATEADD('day', -1, CURRENT_TIMESTAMP())
-    """).to_pandas()["N"][0]
-    col_e.metric("⚠️ App Errors (24h)", f"{errors_24h:,}")
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# TAB 2 — High Risk Customers
-# ════════════════════════════════════════════════════════════════════════════
+# ── 2. High Risk ──────────────────────────────────────────────────────────────
 with tab2:
     st.subheader("🔴 High Risk Customers")
-
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        search_name = st.text_input("🔎 Filter by name", placeholder="e.g. Sarah")
-    with col2:
-        limit = st.slider("Show top N", 10, 500, 100)
-
-    name_filter = f"AND p.FULL_NAME ILIKE '%{search_name}%'" if search_name else ""
-
-    df = session.sql(f"""
-        SELECT
-            p.CUSTOMER_ID,
-            p.FULL_NAME,
-            p.SEGMENT,
-            p.EMAIL,
-            ROUND(p.CHURN_SCORE, 3)  AS CHURN_SCORE,
-            p.RISK_CLASS,
-            f.WIRE_OUT_30D,
-            f.SUPPORT_CASES_30D,
-            ROUND(f.AVG_SENTIMENT, 2) AS AVG_SENTIMENT,
-            f.ACTIVE_DAYS_30D,
-            CASE WHEN a.CUSTOMER_ID IS NOT NULL THEN '✉️ Yes' ELSE '—' END AS EMAIL_SENT
-        FROM DYN_CHURN_PREDICTIONS p
-        JOIN DYN_CUSTOMER_FEATURES f ON p.CUSTOMER_ID = f.CUSTOMER_ID
-        LEFT JOIN (
-            SELECT DISTINCT CUSTOMER_ID FROM AGENT_INTERVENTION_LOG
-            WHERE CREATED_AT > DATEADD('day', -7, CURRENT_TIMESTAMP())
-        ) a ON p.CUSTOMER_ID = a.CUSTOMER_ID
-        WHERE p.RISK_CLASS = 'HIGH'
-        {name_filter}
-        ORDER BY p.CHURN_SCORE DESC
-        LIMIT {limit}
+    df_risk = session.sql("""
+        SELECT FULL_NAME, SEGMENT, CHURN_SCORE, RISK_CLASS, COMPUTED_AT
+        FROM DYN_CHURN_PREDICTIONS WHERE RISK_CLASS = 'HIGH' ORDER BY CHURN_SCORE DESC LIMIT 100
     """).to_pandas()
+    st.dataframe(df_risk, use_container_width=True)
 
-    st.dataframe(df, use_container_width=True, height=500)
-    st.caption(f"Showing {len(df)} high-risk customers")
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# TAB 3 — Live Feed
-# ════════════════════════════════════════════════════════════════════════════
+# ── 3. Live Feed ──────────────────────────────────────────────────────────────
 with tab3:
-    if st.button("🔄 Refresh Feed"):
-        st.rerun()
-
     col1, col2 = st.columns(2)
-
     with col1:
-        st.subheader("💳 Latest Transactions")
-        live = session.sql("""
-            SELECT TRANSACTION_REF, ACCOUNT_ID, TRANSACTION_CODE,
-                   AMOUNT, CHANNEL_ID, POSTING_DATE
-            FROM FACT_TRANSACTION_LEDGER
-            ORDER BY POSTING_DATE DESC LIMIT 50
-        """).to_pandas()
-        st.dataframe(live, use_container_width=True, height=400)
-
+        st.subheader("💳 Transactions")
+        st.dataframe(session.sql("SELECT * FROM FACT_TRANSACTION_LEDGER ORDER BY POSTING_DATE DESC LIMIT 20").to_pandas())
     with col2:
-        st.subheader("⚠️ Latest App Errors")
-        errors = session.sql("""
-            SELECT CUSTOMER_ID, EVENT_TYPE, ERROR_CODE, DEVICE_OS, EVENT_TIMESTAMP
-            FROM APP_ACTIVITY_LOGS
-            WHERE ERROR_CODE IS NOT NULL
-            ORDER BY EVENT_TIMESTAMP DESC LIMIT 50
-        """).to_pandas()
-        st.dataframe(errors, use_container_width=True, height=400)
+        st.subheader("⚠️ App Errors")
+        st.dataframe(session.sql("SELECT * FROM APP_ACTIVITY_LOGS WHERE ERROR_CODE IS NOT NULL ORDER BY EVENT_TIMESTAMP DESC LIMIT 20").to_pandas())
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# TAB 4 — AI Retention Emails
-# ════════════════════════════════════════════════════════════════════════════
+# ── 4. AI Emails ──────────────────────────────────────────────────────────────
 with tab4:
-    st.subheader("✉️ AI-Generated Retention Emails")
-    st.caption("Generated by Cortex COMPLETE (llama3-8b) · 7-day dedup · max 50/run")
+    st.subheader("✉️ Retention Emails")
+    emails = session.sql("SELECT * FROM AGENT_INTERVENTION_LOG ORDER BY CREATED_AT DESC LIMIT 50").to_pandas()
+    for _, row in emails.iterrows():
+        with st.expander(f"Email for {row['CUSTOMER_ID']} (Score: {row['CHURN_SCORE']})"):
+            st.write(row["GENERATED_EMAIL"])
 
-    interventions = session.sql("""
-        SELECT
-            a.INTERVENTION_ID,
-            a.CUSTOMER_ID,
-            c.FULL_NAME,
-            c.SEGMENT,
-            ROUND(a.CHURN_SCORE, 3) AS CHURN_SCORE,
-            a.CREATED_AT,
-            a.GENERATED_EMAIL
-        FROM AGENT_INTERVENTION_LOG a
-        JOIN DIM_CUSTOMERS c ON a.CUSTOMER_ID = c.CUSTOMER_ID
-        ORDER BY a.CREATED_AT DESC
-        LIMIT 100
-    """).to_pandas()
-
-    if interventions.empty:
-        st.info("No emails generated yet. The pipeline will generate emails once high-risk customers are detected (check back in ~5 minutes).")
-    else:
-        st.metric("Total emails generated", len(interventions))
-        for _, row in interventions.iterrows():
-            with st.expander(
-                f"✉️ **{row['FULL_NAME']}** ({row['SEGMENT']}) — "
-                f"Score: **{row['CHURN_SCORE']}** — {str(row['CREATED_AT'])[:16]}"
-            ):
-                st.write(row["GENERATED_EMAIL"])
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# TAB 5 — Cortex Analyst (NL → SQL)
-# ════════════════════════════════════════════════════════════════════════════
+# ── 5. Cortex Analyst (Simulated) ─────────────────────────────────────────────
 with tab5:
-    st.subheader("🔍 Cortex Analyst — Natural Language Queries")
-    st.caption("Ask questions in plain English. Cortex Analyst converts them to SQL using the semantic model.")
+    st.subheader("🔍 Cortex Analyst (Text-to-SQL)")
+    st.caption("Using `llama3-70b` via SQL directly to generate queries from natural language.")
 
-    # Suggested questions
-    suggestions = [
-        "Show me all high risk customers with their churn scores",
-        "What is the average churn score by customer segment?",
-        "Which customers have the highest wire transfer outflows?",
-        "How many retention emails were sent today?",
-        "Show customers with low sentiment and high churn risk",
-    ]
-
-    selected = st.selectbox("💡 Try a suggested question:", [""] + suggestions)
-    analyst_q = st.text_input("Or type your own question:", value=selected)
-
-    if analyst_q and st.button("🔍 Run Analysis", key="analyst_btn"):
-        with st.spinner("Cortex Analyst is thinking..."):
+    question = st.text_input("Ask a question about churn data:", "Show me top 5 high risk customers by churn score")
+    
+    if st.button("Run Analysis", key="btn_analyst"):
+        schema_context = """
+        Table: ANALYST_CHURN_VIEW
+        Columns:
+        - FULL_NAME (text)
+        - SEGMENT (text: Young Professional, Student, Established, High Net Worth)
+        - CHURN_SCORE (number 0-1)
+        - RISK_CLASS (text: HIGH, MEDIUM, LOW)
+        - WIRE_OUT_30D (number)
+        - AVG_SENTIMENT (number 0-1)
+        - TOTAL_SPEND_30D (number)
+        """
+        
+        prompt = f"""
+        You are a Snowflake SQL Expert. 
+        Given tables:
+        {schema_context}
+        
+        Generate a valid Snowflake SQL query for: "{question}"
+        Return ONLY the SQL. No markdown, no explanations.
+        """
+        
+        with st.spinner("Generating SQL..."):
+            sql_resp = run_cortex_complete("llama3-70b", prompt).replace("```sql", "").replace("```", "").strip()
+            st.code(sql_resp, language="sql")
+            
             try:
-                resp = session.sql(f"""
-                    SELECT SNOWFLAKE.CORTEX.ANALYST(
-                        '{analyst_q.replace("'", "''")}',
-                        '@AGENT_ASSETS/semantic_model.yaml'
-                    ) AS RESULT
-                """).collect()
-
-                result = json.loads(resp[0]["RESULT"])
-
-                if "sql" in result:
-                    st.code(result["sql"], language="sql")
-                    df_result = session.sql(result["sql"]).to_pandas()
-                    st.dataframe(df_result, use_container_width=True)
-                    st.caption(f"Returned {len(df_result)} rows")
-                elif "message" in result:
-                    st.info(result["message"])
-                else:
-                    st.json(result)
-
+                df_res = session.sql(sql_resp).to_pandas()
+                st.dataframe(df_res)
             except Exception as e:
-                st.error(f"Analyst error: {e}")
-                st.info("Tip: Cortex Analyst requires SNOWFLAKE.CORTEX_USER role privilege.")
+                st.error(f"SQL Error: {e}")
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# TAB 6 — Cortex Agent (Conversational AI)
-# ════════════════════════════════════════════════════════════════════════════
+# ── 6. Chat Agent (Simulated) ─────────────────────────────────────────────────
 with tab6:
-    st.subheader("🤖 Cortex Agent — Conversational AI")
-    st.caption("Combines Cortex Analyst (SQL) + Cortex Search (log search) in one chat interface.")
+    st.subheader("🤖 Cortex Chat Agent")
+    st.caption("Combines Search + SQL using `llama3-70b` routing.")
 
-    # Init chat history
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Display history
+    # Display Chat History using Custom CSS (no st.chat_message)
     for msg in st.session_state.messages:
         role_class = "chat-user" if msg["role"] == "user" else "chat-bot"
         icon = "👤" if msg["role"] == "user" else "🤖"
-        st.markdown(
-            f'<div class="{role_class}">{icon} {msg["content"]}</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f'<div class="{role_class}">{icon} {msg["content"]}</div>', unsafe_allow_html=True)
 
-    # Input
-    user_input = st.chat_input("Ask about churn risk, customers, transactions, or errors...")
+    st.divider()
 
-    if user_input:
-        st.session_state.messages.append({"role": "user", "content": user_input})
+    # Input Form (Safe for all Streamlit versions)
+    with st.form("chat_form", clear_on_submit=True):
+        col1, col2 = st.columns([6, 1])
+        with col1:
+            user_q = st.text_input("Message:", key="user_q_input")
+        with col2:
+            submitted = st.form_submit_button("Send")
+    
+    if submitted and user_q:
+        # Add User Message
+        st.session_state.messages.append({"role": "user", "content": user_q})
+        st.markdown(f'<div class="chat-user">👤 {user_q}</div>', unsafe_allow_html=True)
 
-        with st.spinner("Agent thinking..."):
-            try:
-                # Build conversation history for the agent
-                history = [
-                    {"role": m["role"], "content": m["content"]}
-                    for m in st.session_state.messages[:-1]
-                ]
-
-                resp = session.sql(f"""
-                    SELECT SNOWFLAKE.CORTEX.AGENT(
-                        'CHURN_INTELLIGENCE_AGENT',
-                        PARSE_JSON('{json.dumps(history).replace("'", "''")}'),
-                        '{user_input.replace("'", "''")}'
-                    ) AS RESPONSE
-                """).collect()
-
-                agent_reply = resp[0]["RESPONSE"]
-
-                # Try to parse structured response
+        with st.spinner("Thinking..."):
+            # 1. Decide intent
+            intent_prompt = f"""
+            Classify intent: SQL (data analysis) or SEARCH (logs/errors).
+            Question: {user_q}
+            Return only 'SQL' or 'SEARCH'.
+            """
+            intent = run_cortex_complete("llama3-70b", intent_prompt).replace("'", "").strip()
+            
+            reply = ""
+            if "SEARCH" in intent:
+                # search logs
+                search_q = f"SELECT SNOWFLAKE.CORTEX.SEARCH_PREVIEW('CHURN_LOGS_SEARCH', '{user_q}', 5)"
                 try:
-                    parsed = json.loads(agent_reply)
-                    reply_text = parsed.get("message", agent_reply)
+                    res = session.sql(search_q).collect()
+                    reply = f"**Found related logs:**\n\n```json\n{res}\n```"
+                except:
+                    reply = "Search service unavailble or error."
+            else:
+                # generate SQL (same as Tab 5)
+                schema_context = "Table: ANALYST_CHURN_VIEW (cols: FULL_NAME, SEGMENT, CHURN_SCORE, RISK_CLASS, WIRE_OUT_30D)"
+                sql_prompt = f"Generate SQL query for table ANALYST_CHURN_VIEW to answer: {user_q}. Return ONLY SQL. LIMIT 10."
+                sql = run_cortex_complete("llama3-70b", sql_prompt).replace("```sql","").replace("```","").strip()
+                try:
+                    df = session.sql(sql).to_pandas()
+                    reply = f"**Here is the data:**\n\n" + df.to_markdown()
+                except Exception as e:
+                    reply = f"I tried to run SQL but failed: {e}\n\nQuery was: `{sql}`"
 
-                    # If agent returned SQL results, show them
-                    if "sql" in parsed:
-                        st.code(parsed["sql"], language="sql")
-                        df_r = session.sql(parsed["sql"]).to_pandas()
-                        st.dataframe(df_r, use_container_width=True)
+            # Add Assistant Message
+            st.session_state.messages.append({"role": "assistant", "content": reply})
+            st.markdown(f'<div class="chat-bot">🤖 {reply}</div>', unsafe_allow_html=True)
+            
+            # Force refresh to show history properly
+            st.rerun()
 
-                    # If agent returned search results
-                    if "results" in parsed:
-                        for r in parsed["results"][:5]:
-                            st.json(r)
-
-                except (json.JSONDecodeError, TypeError):
-                    reply_text = agent_reply
-
-                st.session_state.messages.append({"role": "assistant", "content": reply_text})
-                st.rerun()
-
-            except Exception as e:
-                err_msg = str(e)
-                if "CHURN_INTELLIGENCE_AGENT" in err_msg or "does not exist" in err_msg:
-                    # Fallback: use Analyst directly if Agent not available
-                    try:
-                        resp = session.sql(f"""
-                            SELECT SNOWFLAKE.CORTEX.ANALYST(
-                                '{user_input.replace("'", "''")}',
-                                '@AGENT_ASSETS/semantic_model.yaml'
-                            ) AS RESULT
-                        """).collect()
-                        result = json.loads(resp[0]["RESULT"])
-                        if "sql" in result:
-                            st.code(result["sql"], language="sql")
-                            df_r = session.sql(result["sql"]).to_pandas()
-                            st.dataframe(df_r, use_container_width=True)
-                            reply_text = f"_(Cortex Agent unavailable — using Analyst directly)_\n\nFound {len(df_r)} results."
-                        else:
-                            reply_text = result.get("message", str(result))
-                    except Exception as e2:
-                        reply_text = f"Error: {e2}"
-                else:
-                    reply_text = f"Agent error: {err_msg}"
-
-                st.session_state.messages.append({"role": "assistant", "content": reply_text})
-                st.rerun()
-
-    if st.button("🗑️ Clear Chat"):
+    if st.button("Start New Chat"):
         st.session_state.messages = []
         st.rerun()
