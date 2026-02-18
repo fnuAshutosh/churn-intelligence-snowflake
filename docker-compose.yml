@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  setup:
+    build: .
+    container_name: churn_setup
+    command: python scripts/setup.py
+    env_file: .env
+    environment:
+      - SNOWFLAKE_WAREHOUSE=${SNOWFLAKE_WAREHOUSE:-BANK_WAREHOUSE}
+      - SNOWFLAKE_DATABASE=${SNOWFLAKE_DATABASE:-CHURN_DEMO}
+      - SNOWFLAKE_SCHEMA=${SNOWFLAKE_SCHEMA:-PUBLIC}
+    restart: "no"
+
+  cortex:
+    build: .
+    container_name: churn_cortex
+    command: python scripts/deploy_cortex.py
+    env_file: .env
+    environment:
+      - SNOWFLAKE_WAREHOUSE=${SNOWFLAKE_WAREHOUSE:-BANK_WAREHOUSE}
+      - SNOWFLAKE_DATABASE=${SNOWFLAKE_DATABASE:-CHURN_DEMO}
+      - SNOWFLAKE_SCHEMA=${SNOWFLAKE_SCHEMA:-PUBLIC}
+    depends_on:
+      - setup
+    restart: "no"
+
+  producer:
+    build: .
+    container_name: kafka_producer
+    command: python streaming/producer.py --kafka kafka:29092 --duration 86400 --rate 200
+    depends_on:
+      - kafka
+      - setup
+    environment:
+      - KAFKA_BROKER=kafka:29092
+    restart: on-failure
+
+  consumer:
+    build: .
+    container_name: kafka_consumer
+    command: python streaming/consumer.py
+    env_file: .env
+    depends_on:
+      - kafka
+      - setup
+    environment:
+      - KAFKA_BROKER=kafka:29092
+      - SNOWFLAKE_WAREHOUSE=${SNOWFLAKE_WAREHOUSE:-BANK_WAREHOUSE}
+      - SNOWFLAKE_DATABASE=${SNOWFLAKE_DATABASE:-CHURN_DEMO}
+      - SNOWFLAKE_SCHEMA=${SNOWFLAKE_SCHEMA:-PUBLIC}
+    restart: unless-stopped

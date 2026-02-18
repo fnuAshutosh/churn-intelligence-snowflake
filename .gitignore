@@ -1,10 +1,8 @@
-# Ignore everything by default
-*
-
-# Allow the main project folder
-!/churn-intelligence-snowflake
-!/churn-intelligence-snowflake/**
-
-# Allow git metadata
-!.gitignore
-!.git/
+.vscode
+.env
+.venv-wsl
+.venv_stable
+data
+configs
+churn-intelligence-snowflake
+settings.toml
